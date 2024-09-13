@@ -82,17 +82,19 @@ int main() {
 			continue;
 		}
 
-		printf("Received request: %s\n", buffer);
 		const char *response = handle_request(buffer);
-		printf("Sending response: %s\n", response);
 
 		if (send(client_fd, response, strlen(response), 0) < 0) {
 			printf("Failed to send response: %s\n", strerror(errno));
 		}
 
+		if (response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P') {
+			
+		} else {
+			free((void*)response);
+		}
 
-
-		send(client_fd, response, strlen(response), 0);
+		
 
 		close(client_fd);
 	}
@@ -109,40 +111,57 @@ char* handle_request(char* buffer){
 		char* first_line = extract_first_line(buffer);
 
 		if (end_of_request_line != NULL && first_line != NULL) {
-			
+
 			int request_line_length = end_of_request_line - buffer;
-
 			char request_line[request_line_length + 1];
-
 			strncpy(request_line, buffer, request_line_length);
-
 			request_line[request_line_length] = '\0';
-
-			printf("Request line: %s\n", request_line);
 
 			char *method = strtok(request_line, " ");
 			char *path = strtok(NULL, " ");
 			char *version = strtok(NULL, " ");
 
-			if (path != NULL){
-				if (strcmp(path, "/") == 0) {
+			if ( method != NULL && path != NULL) {
+
+				if (strncmp(path, "/echo/", 6) == 0){
+
+					char* echo_string = path + 6;
+					int content_length = strlen(echo_string);
+					char *response = malloc(256 + content_length);
+
+					if (response == NULL){
+						free(first_line);
+						return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+					}
+
+					sprintf(response,
+						"HTTP/1.1 200 OK\r\n"
+						"Content-Type: text/plain\r\n"
+						"Content-Length: %d\r\n"
+						"\r\n"
+						"%s", content_length, echo_string);
+
+					free(first_line);
+					return response;
+				} else if (strcmp(path, "/") == 0){
+					free(first_line);
 					return "HTTP/1.1 200 OK\r\n\r\n";
-				
 				} else {
-				return "HTTP/1.1 404 Not Found\r\n\r\n";
+					free(first_line);
+					return "HTTP/1.1 404 Not Found\r\n\r\n";
+				}
+
 			}
-			
-		}else {
-				return "HTTP/1.1 400 Bad Request\r\n\r\n";
-			}
-	}
-	else {
-            return "HTTP/1.1 400 Bad Request\r\n\r\n";
+
+		}
+
+		if (first_line != NULL) {
+			free(first_line);
+		}
 	
+	return "HTTP/1.1 400 Bad Request\r\n\r\n";
 	}
-}
-
-
+		
 
 /**
  * @brief Extracts the first line from a given buffer
@@ -177,7 +196,6 @@ char* extract_first_line(char* buffer) {
 
         // Return the pointer to the new string containing the first line
         return first_line;
-		free(first_line);
     }
 
     // Return NULL if no line ending ("\r\n") was found
