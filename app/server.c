@@ -121,9 +121,8 @@ char* handle_request(char* buffer){
 			char *path = strtok(NULL, " ");
 			char *version = strtok(NULL, " ");
 
-			if ( method != NULL && path != NULL) {
-
-				if (strncmp(path, "/echo/", 6) == 0){
+			if (method != NULL && path != NULL) {
+			 	if (strncmp(path, "/echo/", 6) == 0){
 
 					char* echo_string = path + 6;
 					int content_length = strlen(echo_string);
@@ -143,24 +142,49 @@ char* handle_request(char* buffer){
 
 					free(first_line);
 					return response;
-				} else if (strcmp(path, "/") == 0){
+				}
+				else if (strcmp(path, "/user-agent") == 0) {
+					char *user_agent = strstr(buffer, "User-Agent: ");
+					if (user_agent) {
+						user_agent += 12;  // Skip "User-Agent: "
+						char *end_of_user_agent = strstr(user_agent, "\r\n");
+						if (end_of_user_agent) {
+							int content_length = end_of_user_agent - user_agent;
+							char *response = malloc(256 + content_length);
+							if (response == NULL) {
+								free(first_line);
+								return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+							}
+							sprintf(response,
+								"HTTP/1.1 200 OK\r\n"
+								"Content-Type: text/plain\r\n"
+								"Content-Length: %d\r\n"
+								"\r\n"
+								"%.*s", content_length, content_length, user_agent);
+							free(first_line);
+							return response;
+						}
+					}
+					// If we get here, we couldn't find the User-Agent
+					free(first_line);
+					return "HTTP/1.1 400 Bad Request\r\n\r\n";
+				} else if (strcmp(path, "/") == 0) {
 					free(first_line);
 					return "HTTP/1.1 200 OK\r\n\r\n";
 				} else {
 					free(first_line);
 					return "HTTP/1.1 404 Not Found\r\n\r\n";
 				}
-
 			}
+			// If we get here, either method or path was NULL
+			if (first_line != NULL) {
+				free(first_line);
+			}
+			return "HTTP/1.1 400 Bad Request\r\n\r\n";
 
-		}
-
-		if (first_line != NULL) {
-			free(first_line);
-		}
-	
-	return "HTTP/1.1 400 Bad Request\r\n\r\n";
 	}
+
+}
 		
 
 /**
