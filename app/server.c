@@ -21,6 +21,7 @@ char* handle_request(char* buffer, const char* directory);
 char* extract_first_line(char* buffer);
 char* handle_file_request(const char* filename, const char* directory);
 char* handle_post_file_request(const char* filename, const char* directory, const char* content, size_t content_length);
+int client_accepts_gzip(const char* buffer);
 
 struct client_info{
 	int client_fd;               // Client file descriptor
@@ -138,6 +139,16 @@ int main(int argc, char *argv[]) {
 
 	return 0;
 }
+int client_accepts_gzip(const char* buffer) {
+
+	const char* accept_encoding = strstr(buffer, "Accept-Encoding:");
+	if (accept_encoding) {
+		return (strstr(accept_encoding, "gzip") != NULL);
+	}
+	return 0;
+}
+
+
 
 char* handle_post_file_request(const char* filename, const char* directory, const char* content, size_t content_length) {
 
@@ -274,34 +285,45 @@ char* handle_request(char* buffer, const char* directory){
 								return response;
 							}
 					}
-				free(first_line);
-				return "HTTP/1.1 400 Bad Request\r\n\r\n";
-				}
-					
-					
-
+					free(first_line);
+					return "HTTP/1.1 400 Bad Request\r\n\r\n";
+					}
 				}
 			 	else if (strncmp(path, "/echo/", 6) == 0){
-
-
 					char* echo_string = path + 6;
 					int content_length = strlen(echo_string);
 					char *response = malloc(256 + content_length);
+					int accepts_gzip = client_accepts_gzip(buffer);
 
-					if (response == NULL){
-						free(first_line);
-						return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-					}
-
-					sprintf(response,
+					if(accepts_gzip) {
+						response = malloc(256 + content_length);
+						if (response == NULL){
+							free(first_line);
+							return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+						}
+						sprintf(response,
+						"HTTP/1.1 200 OK\r\n"
+						"Content-Type: text/plain\r\n"
+						"Content-Encoding: gzip\r\n"
+						"Content-Length: %d\r\n"
+						"\r\n"
+						"%s", content_length, echo_string);
+					} else {
+						response = malloc(256 + content_length);
+						if (response == NULL){
+							free(first_line);
+							return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+						}
+						sprintf(response,
 						"HTTP/1.1 200 OK\r\n"
 						"Content-Type: text/plain\r\n"
 						"Content-Length: %d\r\n"
 						"\r\n"
 						"%s", content_length, echo_string);
-
+					}
 					free(first_line);
 					return response;
+					
 				}
 				else if (strcmp(path, "/user-agent") == 0) {
 					char *user_agent = strstr(buffer, "User-Agent: ");
