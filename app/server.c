@@ -8,28 +8,45 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-
+#include <sys/wait.h>
+#include <pthread.h>
+#include <time.h>
 
 
 #define BUFFER_SIZE 1024
 
+void *handle_client(void *arg);
 char* handle_request(char* buffer);
 char* extract_first_line(char* buffer);
 
 
+struct client_info{
+	int client_fd;               // Client file descriptor
+    struct sockaddr_in address;  // Client address information
+    char buffer[BUFFER_SIZE];    // Buffer to store incoming data
+    // size_t buffer_used;          // Amount of data currently in the buffer
+    // time_t last_activity;   // Timestamp of last activity (for timeout handling) 
+	// is_header_complete;    //A boolean flag to indicate whether the full HTTP header has been received.
+	// content_length;        //integer to store the content length of the request, if present.
+	// request_method;        //enum or string to store the HTTP method
+	// request_path; 		   //string to store the requested path
+
+};
+
+struct sockaddr_in client_addr;
+
+int server_fd, client_addr_len, client_fd;
+
+
 int main() {
+
+	char buffer [BUFFER_SIZE] = {0};
 	// Disable output buffering
 	setbuf(stdout, NULL);
  	setbuf(stderr, NULL);
 
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	printf("Logs from your program will appear here!\n");
-
-
-
-	int server_fd, client_addr_len, client_fd;
-	struct sockaddr_in client_addr;
-	char buffer [BUFFER_SIZE] = {0};
 
 	server_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_fd == -1) {
@@ -62,48 +79,75 @@ int main() {
 	}
 	
 	printf("Waiting for a client to connect...\n");
-	client_addr_len = sizeof(client_addr);
-
+	
+	
 	while(1) {
-		client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-		if (client_fd < 0) {
+
+		struct client_info *client = malloc(sizeof(struct client_info));
+		client_addr_len = sizeof(client->address);
+		
+		
+		if ((client->client_fd = accept(server_fd, (struct sockaddr *)&client->address, &client_addr_len)) < 0) {
 
 			printf("Accept failed: %s \n", strerror(errno));
+			free(client);
 			continue;
 		}
 		
 		printf("Client connected\n");
 
-		int valread = read(client_fd, buffer, BUFFER_SIZE);
+		
+		pthread_t thread_id;
 
-		if (valread < 0){
-			printf("Failed to read from client: %s\n", strerror(errno));
-			close(client_fd);
+		if (pthread_create(&thread_id, NULL, handle_client,(void *)client) < 0) {
+
+			printf("Error creating thread: %\n");
+			free(client);
+			close(client->client_fd);
 			continue;
 		}
 
-		const char *response = handle_request(buffer);
-
-		if (send(client_fd, response, strlen(response), 0) < 0) {
-			printf("Failed to send response: %s\n", strerror(errno));
-		}
-
-		if (response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P') {
-			
-		} else {
-			free((void*)response);
-		}
-
-		
-
-		close(client_fd);
-	}
+		pthread_detach(thread_id);
 	
+	}
+
 	close(server_fd);
 
 	return 0;
 }
 
+
+
+void *handle_client(void *arg) {
+
+	struct client_info *client = (struct client_info *)arg;	
+	char buffer [BUFFER_SIZE] = {0};
+
+	int valread = read(client->client_fd, buffer, BUFFER_SIZE);
+
+	if (valread < 0){
+		printf("Failed to read from client: %s\n", strerror(errno));
+	} else {
+
+		const char *response = handle_request(buffer);
+
+		if (send(client->client_fd, response, strlen(response), 0) < 0) {
+			printf("Failed to send response: %s\n", strerror(errno));
+		}
+
+		if (response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P') {
+		
+			free((void*)response);
+		}
+
+}
+	
+	
+	close(client->client_fd);
+	free(client);
+	return NULL;
+
+}
 
 char* handle_request(char* buffer){
 
@@ -183,6 +227,8 @@ char* handle_request(char* buffer){
 			return "HTTP/1.1 400 Bad Request\r\n\r\n";
 
 	}
+
+	return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
 
 }
 		
