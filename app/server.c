@@ -13,6 +13,8 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <zlib.h>
+
 
 #define BUFFER_SIZE 1024
 
@@ -22,6 +24,8 @@ char* extract_first_line(char* buffer);
 char* handle_file_request(const char* filename, const char* directory);
 char* handle_post_file_request(const char* filename, const char* directory, const char* content, size_t content_length);
 int client_accepts_gzip(const char* buffer);
+char* gzip_compress(const char* data, size_t data_len, size_t* compressed_len);
+
 
 struct client_info{
 	int client_fd;               // Client file descriptor
@@ -139,6 +143,44 @@ int main(int argc, char *argv[]) {
 
 	return 0;
 }
+
+
+
+char* gzip_compress(const char* data, size_t data_len, size_t* compressed_len) {
+
+	z_stream strm = {0};
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque =  Z_NULL;
+
+	if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+		return NULL;
+	}
+
+	size_t buffer_size = deflateBound(&strm, data_len);
+	char* compressed = malloc(buffer_size);
+	if (compressed == NULL){
+		deflateEnd(&strm);
+		return NULL;
+	}
+
+		strm.next_in = (Bytef*)data;
+		strm.avail_in = data_len;
+		strm.next_out = (Bytef*)compressed;
+		strm.avail_out = buffer_size;
+
+	if (deflate(&strm, Z_FINISH) != Z_STREAM_END) {
+		free(compressed);
+		deflateEnd(&strm);
+		return NULL;
+	}
+
+	*compressed_len = strm.total_out;
+	deflateEnd(&strm);
+	return compressed;
+	
+
+}
 int client_accepts_gzip(const char* buffer) {
 
 	const char* accept_encoding = strstr(buffer, "Accept-Encoding:");
@@ -218,29 +260,47 @@ char* handle_file_request(const char* filename, const char* directory) {
 
 void *handle_client(void *arg) {
 
+		
 	struct client_info *client = (struct client_info *)arg;	
 	char buffer [BUFFER_SIZE] = {0};
+
 
 	int valread = read(client->client_fd, buffer, BUFFER_SIZE);
 
 	if (valread < 0){
 		printf("Failed to read from client: %s\n", strerror(errno));
-	} else {
+		close(client->client_fd);
+		return NULL;
+	}
 
-		const char *response = handle_request(buffer, client->directory);
 
-		if (send(client->client_fd, response, strlen(response), 0) < 0) {
-			printf("Failed to send response: %s\n", strerror(errno));
-		}
 
-		if (response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P') {
+	const char *response = handle_request(buffer, client->directory);
+	ssize_t response_length = strlen(response);
+	
+	
+	if (strstr(response, "Content-Encoding: gzip")){
+
+		char* body_start = strstr(response, "\r\n\r\n") + 4;
+		response_length = (body_start - response) + *(size_t*)(response  - 8);
 		
-			free((void*)response);
+	} 
+
+	ssize_t total_sent = 0;
+	while (total_sent < response_length) {
+		
+		ssize_t sent = write(client->client_fd, response + total_sent, response_length - total_sent);
+		if (sent < 0) {
+			printf("Failed to send response: %s\n", strerror(errno));
+			break;
 		}
+	
+		total_sent += sent;
 
 }
-	
-	
+
+
+	free((void*)response);
 	close(client->client_fd);
 	free(client);
 	return NULL;
@@ -296,20 +356,33 @@ char* handle_request(char* buffer, const char* directory){
 					int accepts_gzip = client_accepts_gzip(buffer);
 
 					if(accepts_gzip) {
-						response = malloc(256 + content_length);
-						if (response == NULL){
+						size_t compressed_length;
+						char* compressed_data = gzip_compress(echo_string, content_length, &compressed_length);
+						if (compressed_data == NULL) {
 							free(first_line);
 							return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
 						}
-						sprintf(response,
+
+						*response = malloc(256 + content_length);
+						if (response == NULL){
+							free(compressed_data);
+							free(first_line);
+							return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+						}
+
+						int header_length = sprintf(response,
 						"HTTP/1.1 200 OK\r\n"
 						"Content-Type: text/plain\r\n"
 						"Content-Encoding: gzip\r\n"
-						"Content-Length: %d\r\n"
-						"\r\n"
-						"%s", content_length, echo_string);
+						"Content-Length: %zu\r\n"
+						"\r\n", compressed_length);
+
+						memcpy(response + strlen(response), compressed_data, compressed_length);
+						free(compressed_data);
+						free(first_line);
+						return response;
 					} else {
-						response = malloc(256 + content_length);
+						*response = malloc(256 + content_length);
 						if (response == NULL){
 							free(first_line);
 							return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
