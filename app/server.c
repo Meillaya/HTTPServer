@@ -20,6 +20,7 @@ void *handle_client(void *arg);
 char* handle_request(char* buffer, const char* directory);
 char* extract_first_line(char* buffer);
 char* handle_file_request(const char* filename, const char* directory);
+char* handle_post_file_request(const char* filename, const char* directory, const char* content, size_t content_length);
 
 struct client_info{
 	int client_fd;               // Client file descriptor
@@ -138,6 +139,27 @@ int main(int argc, char *argv[]) {
 	return 0;
 }
 
+char* handle_post_file_request(const char* filename, const char* directory, const char* content, size_t content_length) {
+
+	char filepath[BUFFER_SIZE];
+	snprintf(filepath, sizeof(filepath), "%s/%s", directory, filename);
+
+	int f_d = open(filepath, O_WRONLY | O_CREAT, O_TRUNC, 0644);
+	if (f_d == -1) {
+		return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+	}
+
+	ssize_t bytes_written = write(f_d, content, content_length);
+	close(f_d);
+
+	if (bytes_written != content_length) {
+
+		return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+	}
+
+	return "HTTP/1.1 201 Created\r\n\r\n";
+	
+}
 char* handle_file_request(const char* filename, const char* directory) {
 
 	char filepath[BUFFER_SIZE];
@@ -232,11 +254,31 @@ char* handle_request(char* buffer, const char* directory){
 
 			if (method != NULL && path != NULL) {
 				if (strncmp(path, "/files/", 7) == 0) {
-
 					char* filename = path + 7;
-					char* response = handle_file_request(filename, directory);
-					free(first_line);
-					return response;
+					
+					if (strcmp(method, "GET") == 0) {
+						char* response = handle_file_request(filename, directory);
+						free(first_line);
+						return response;
+					}
+					else if (strcmp(method, "POST") == 0) {
+						char *content_length_str = strstr(buffer, "Content-Length: ");
+						if (content_length_str) {
+							content_length_str +=16;
+							size_t content_length = atoi(content_length_str);
+							char *body_start = strstr(buffer, "\r\n\r\n");
+							if(body_start) {
+								body_start += 4;
+								char* response = handle_post_file_request(filename, directory, body_start, content_length);
+								free(first_line);
+								return response;
+							}
+					}
+				free(first_line);
+				return "HTTP/1.1 400 Bad Request\r\n\r\n";
+				}
+					
+					
 
 				}
 			 	else if (strncmp(path, "/echo/", 6) == 0){
