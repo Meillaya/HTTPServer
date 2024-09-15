@@ -11,19 +11,21 @@
 #include <sys/wait.h>
 #include <pthread.h>
 #include <time.h>
-
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define BUFFER_SIZE 1024
 
 void *handle_client(void *arg);
-char* handle_request(char* buffer);
+char* handle_request(char* buffer, const char* directory);
 char* extract_first_line(char* buffer);
-
+char* handle_file_request(const char* filename, const char* directory);
 
 struct client_info{
 	int client_fd;               // Client file descriptor
     struct sockaddr_in address;  // Client address information
-    char buffer[BUFFER_SIZE];    // Buffer to store incoming data
+    char buffer[BUFFER_SIZE];   // Buffer to store incoming data
+	const char* directory;
     // size_t buffer_used;          // Amount of data currently in the buffer
     // time_t last_activity;   // Timestamp of last activity (for timeout handling) 
 	// is_header_complete;    //A boolean flag to indicate whether the full HTTP header has been received.
@@ -34,13 +36,12 @@ struct client_info{
 };
 
 struct sockaddr_in client_addr;
-
 int server_fd, client_addr_len, client_fd;
+char * directory_path = NULL;
 
+int main(int argc, char *argv[]) {
 
-int main() {
-
-	char buffer [BUFFER_SIZE] = {0};
+	
 	// Disable output buffering
 	setbuf(stdout, NULL);
  	setbuf(stderr, NULL);
@@ -54,6 +55,27 @@ int main() {
 		return 1;
 	}
 	
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--directory") == 0 && i + 1 < argc) {
+			directory_path = argv[i + 1];
+			break;
+		}
+
+	}
+
+	if (directory_path != NULL) {
+		if (access(directory_path, F_OK) == -1) {
+
+			fprintf(stderr, "Error: Specified directory does not exist\n");
+			return 1;
+		}
+		printf("Using directory: %\n", directory_path);
+		// fprintf(stderr, "Error: --directory flag is required");
+	} else {
+		printf("No directory specified. Proceeding without file serving capabilities.\n");
+	}
+
+
 	// Since the tester restarts your program quite often, setting SO_REUSEADDR
 	// ensures that we don't run into 'Address already in use' errors
 	int reuse = 1;
@@ -85,7 +107,7 @@ int main() {
 
 		struct client_info *client = malloc(sizeof(struct client_info));
 		client_addr_len = sizeof(client->address);
-		
+		client->directory = directory_path;
 		
 		if ((client->client_fd = accept(server_fd, (struct sockaddr *)&client->address, &client_addr_len)) < 0) {
 
@@ -116,7 +138,50 @@ int main() {
 	return 0;
 }
 
+char* handle_file_request(const char* filename, const char* directory) {
 
+	char filepath[BUFFER_SIZE];
+	snprintf(filepath, sizeof(filepath), "%s/%s", directory, filename);
+
+	int f_d = open(filepath, O_RDONLY);
+	if(f_d == -1) {
+
+		return "HTTP/1.1 404 Not Found\r\n\r\n";
+	}
+
+	struct stat s_t;
+	if (fstat(f_d, &s_t) == -1) {
+		close(f_d);
+
+		return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+	} 
+
+	char* response = malloc(s_t.st_size + 256);
+	if (response == NULL) {
+
+		close(f_d);
+		return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+	}
+
+	int header_length = sprintf(response,
+		"HTTP/1.1 200 OK\r\n"
+		"Content-Type: application/octet-stream\r\n"
+        "Content-Length: %ld\r\n"
+		"\r\n", s_t.st_size);
+
+	
+	ssize_t bytes_read = read(f_d, response + header_length, s_t.st_size);
+	close(f_d);
+
+	if(bytes_read != s_t.st_size) {
+		free(response);
+		return "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+	}
+
+	return response;
+
+
+}
 
 void *handle_client(void *arg) {
 
@@ -129,7 +194,7 @@ void *handle_client(void *arg) {
 		printf("Failed to read from client: %s\n", strerror(errno));
 	} else {
 
-		const char *response = handle_request(buffer);
+		const char *response = handle_request(buffer, client->directory);
 
 		if (send(client->client_fd, response, strlen(response), 0) < 0) {
 			printf("Failed to send response: %s\n", strerror(errno));
@@ -149,7 +214,7 @@ void *handle_client(void *arg) {
 
 }
 
-char* handle_request(char* buffer){
+char* handle_request(char* buffer, const char* directory){
 
 		char *end_of_request_line = strstr(buffer, "\r\n");
 		char* first_line = extract_first_line(buffer);
@@ -166,7 +231,16 @@ char* handle_request(char* buffer){
 			char *version = strtok(NULL, " ");
 
 			if (method != NULL && path != NULL) {
-			 	if (strncmp(path, "/echo/", 6) == 0){
+				if (strncmp(path, "/files/", 7) == 0) {
+
+					char* filename = path + 7;
+					char* response = handle_file_request(filename, directory);
+					free(first_line);
+					return response;
+
+				}
+			 	else if (strncmp(path, "/echo/", 6) == 0){
+
 
 					char* echo_string = path + 6;
 					int content_length = strlen(echo_string);
